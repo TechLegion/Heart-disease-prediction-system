@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Trained models (regenerate with: python main.py)
+models/
+*.joblib
+
+# Generated binary results (regenerate with: python main.py)
+results/*.png
+results/*.joblib
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Large binary documents
+*.docx
