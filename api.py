@@ -7,6 +7,10 @@ encoding is shared with the training pipeline.
 
 Run with:
     uvicorn api:app --reload --port 8000
+
+Interactive docs (Swagger UI):  GET http://localhost:8000/docs
+Alternative docs (ReDoc):        GET http://localhost:8000/redoc
+OpenAPI JSON schema:             GET http://localhost:8000/openapi.json
 """
 
 from __future__ import annotations
@@ -239,8 +243,15 @@ def _compute_risk_factors(raw_numeric: dict[str, float]) -> list[RiskFactor]:
 # ---------------------------------------------------------------------------
 app = FastAPI(
     title="Heart Disease Prediction API",
-    description="REST API exposing the GA/PSO-optimized ANN models.",
+    description=(
+        "REST API exposing the GA/PSO-optimized ANN models. "
+        "Use **/docs** for Swagger UI (try-it-out requests)."
+    ),
     version="2.0.0",
+    # Explicitly enable OpenAPI + Swagger; never rely on implicit defaults alone.
+    openapi_url="/openapi.json",
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True,
@@ -419,6 +430,9 @@ def root() -> dict[str, Any]:
         "name": "Heart Disease Prediction API",
         "version": "2.0.0",
         "docs": "/docs",
+        "swagger_ui": "/docs",
+        "redoc": "/redoc",
+        "openapi_json": "/openapi.json",
         "endpoints": [
             "GET  /api/health", "GET  /api/models", "GET  /api/features",
             "GET  /api/samples", "POST /api/predict",
