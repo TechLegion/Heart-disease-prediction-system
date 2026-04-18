@@ -9,3 +9,5 @@ ucimlrepo
 streamlit
 joblib
 plotly
+fastapi
+uvicorn[standard]
