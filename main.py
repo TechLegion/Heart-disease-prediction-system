@@ -1,337 +1,376 @@
 """
-Main Script for Heart Disease Prediction System
+Main Script for the Heart Disease Prediction System (v2).
 
 Pipeline:
-  1. Load and preprocess data
-  2. Train & compare: Baseline ANN, GA-ANN, PSO-ANN, Hybrid GA-PSO-ANN
-  3. Save results (CSV, plots, ROC data)
-  4. Run 5-fold cross-validation
-  5. Save all trained models for the Streamlit UI
+  1. Load + preprocess (one-hot encoded features, KNN imputation).
+  2. Train & compare: Baseline ANN, GA-ANN, PSO-ANN, Hybrid GA-PSO-ANN,
+     XGBoost baseline, and a Seed-Averaging Ensemble of the best Hybrid.
+  3. Save single-split metrics + ROC data.
+  4. Run 5-fold stratified cross-validation for every model.
+  5. Save every trained model plus the fitted preprocessor for the UI / API.
 """
 
-import sys, os
+from __future__ import annotations
+
+import os
+import sys
+import joblib
+
+# Force UTF-8 on Windows consoles so Greek letters / arrows print cleanly.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import joblib
 from sklearn.model_selection import train_test_split, StratifiedKFold
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score, roc_auc_score,
+)
 
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
 
 from data_preprocessing import HeartDiseasePreprocessor
 from baseline_ann import BaselineANN
-from ga_optimizer import GAOptimizer
+from ga_optimizer import GAOptimizer, build_ann_from_params
 from pso_optimizer import PSOOptimizer
 from hybrid_model import HybridGAPSOANN
+from ensemble_model import SeedEnsembleANN
+
+try:
+    from xgboost_baseline import XGBoostBaseline  # type: ignore
+    _HAS_XGBOOST = True
+except Exception as _e:
+    print(f"[WARN] XGBoost baseline unavailable: {_e}")
+    _HAS_XGBOOST = False
+    XGBoostBaseline = None  # type: ignore
+
+
+# ====================================================================
+# Helpers
+# ====================================================================
+def _row(name: str, m: dict) -> dict:
+    return {
+        "Model": name,
+        "Accuracy":  m["accuracy"],
+        "Precision": m["precision"],
+        "Recall":    m["recall"],
+        "F1-Score":  m["f1_score"],
+        "AUC":       m["auc"],
+    }
+
+
+def _zero_row(name: str) -> dict:
+    return {"Model": name, "Accuracy": 0.0, "Precision": 0.0,
+            "Recall": 0.0, "F1-Score": 0.0, "AUC": 0.0}
 
 
 # ====================================================================
 # Single-split model comparison
 # ====================================================================
 def compare_models(X_train, y_train, X_val, y_val, X_test, y_test,
-                   verbose=True):
-    """Train all four models, evaluate, and return (DataFrame, dict of models)."""
-    results = []
-    roc_data = {}
-    trained_models = {}
+                   random_state: int = 42, verbose: bool = True):
+    """Train all models, evaluate on X_test, return dataframes + trained models."""
+    results: list[dict] = []
+    roc_data: dict = {}
+    trained_models: dict = {}
 
-    print("\n" + "=" * 80)
-    print("MODEL COMPARISON EXPERIMENT")
-    print("=" * 80)
+    print("\n" + "=" * 80 + "\nMODEL COMPARISON EXPERIMENT\n" + "=" * 80)
 
-    # 1. Baseline ANN ------------------------------------------------
-    print("\n[1/4] Training Baseline ANN Model...")
-    print("-" * 80)
-    baseline = BaselineANN(hidden_layer_sizes=(100, 50), max_iter=500)
-    baseline.train(X_train, y_train)
+    # 1. Baseline ANN -------------------------------------------------
+    print("\n[1/6] Training Baseline ANN Model...")
+    baseline = BaselineANN(hidden_layer_sizes=(100, 50), max_iter=500,
+                           random_state=random_state)
+    baseline.train(X_train, y_train, verbose=verbose)
     m = baseline.evaluate(X_test, y_test, verbose=verbose,
                           model_name="BASELINE ANN")
     results.append(_row("Baseline ANN", m))
-    roc_data["Baseline ANN"] = (m['fpr'], m['tpr'], m['auc'])
+    roc_data["Baseline ANN"] = (m["fpr"], m["tpr"], m["auc"])
     trained_models["Baseline ANN"] = baseline
 
-    # 2. GA-Optimised ANN -------------------------------------------
-    print("\n[2/4] Training GA-Optimised ANN Model...")
-    print("-" * 80)
+    # 2. GA-Optimized ANN --------------------------------------------
+    print("\n[2/6] Training GA-Optimised ANN Model...")
     try:
-        ga_opt = GAOptimizer(
-            X_train, y_train, X_val, y_val,
-            n_population=50, n_generations=40, random_state=42)
-        ga_opt.optimize(verbose=verbose)
-        ga_ann = ga_opt.get_optimized_ann()
-        ga_ann.train(X_train, y_train)
+        ga = GAOptimizer(X_train, y_train,
+                         n_population=30, n_generations=20, cv_folds=3,
+                         eval_max_iter=200, random_state=random_state)
+        ga.optimize(verbose=verbose)
+        ga_ann = ga.get_optimized_ann()
+        ga_ann.train(X_train, y_train, verbose=False)
         m = ga_ann.evaluate(X_test, y_test, verbose=verbose,
                             model_name="GA-OPTIMISED ANN")
         results.append(_row("GA-Optimized ANN", m))
-        roc_data["GA-Optimized ANN"] = (m['fpr'], m['tpr'], m['auc'])
+        roc_data["GA-Optimized ANN"] = (m["fpr"], m["tpr"], m["auc"])
         trained_models["GA-Optimized ANN"] = ga_ann
     except Exception as e:
-        print(f"GA optimization failed: {e}")
+        print(f"GA optimisation failed: {e}")
         results.append(_zero_row("GA-Optimized ANN"))
 
-    # 3. PSO-Optimised ANN ------------------------------------------
-    print("\n[3/4] Training PSO-Optimised ANN Model...")
-    print("-" * 80)
+    # 3. PSO-Optimized ANN -------------------------------------------
+    print("\n[3/6] Training PSO-Optimised ANN Model...")
     try:
-        pso_opt = PSOOptimizer(
-            X_train, y_train, X_val, y_val,
-            n_particles=30, iterations=50, random_state=42)
-        pso_opt.optimize(initial_ann=baseline, verbose=verbose)
-        pso_ann = pso_opt.get_optimized_ann()
-        pso_ann.train(X_train, y_train)
+        pso = PSOOptimizer(X_train, y_train,
+                           n_particles=20, iterations=25, cv_folds=3,
+                           eval_max_iter=200, random_state=random_state)
+        pso.optimize(initial_ann=baseline, verbose=verbose)
+        pso_ann = pso.get_optimized_ann()
+        pso_ann.train(X_train, y_train, verbose=False)
         m = pso_ann.evaluate(X_test, y_test, verbose=verbose,
                              model_name="PSO-OPTIMISED ANN")
         results.append(_row("PSO-Optimized ANN", m))
-        roc_data["PSO-Optimized ANN"] = (m['fpr'], m['tpr'], m['auc'])
+        roc_data["PSO-Optimized ANN"] = (m["fpr"], m["tpr"], m["auc"])
         trained_models["PSO-Optimized ANN"] = pso_ann
     except Exception as e:
-        print(f"PSO optimization failed: {e}")
+        print(f"PSO optimisation failed: {e}")
         results.append(_zero_row("PSO-Optimized ANN"))
 
-    # 4. Hybrid GA-PSO-ANN -----------------------------------------
-    print("\n[4/4] Training Hybrid GA-PSO-ANN Model...")
-    print("-" * 80)
+    # 4. Hybrid GA-PSO-ANN -------------------------------------------
+    print("\n[4/6] Training Hybrid GA-PSO-ANN Model...")
+    hybrid_params: dict | None = None
     try:
         hybrid = HybridGAPSOANN(
-            hidden_layer_sizes=(100, 50),
-            ga_params={'n_population': 50, 'n_generations': 40},
-            pso_params={'n_particles': 30, 'iterations': 50},
-            random_state=42,
+            top_k=3,
+            ga_params={"n_population": 30, "n_generations": 20, "cv_folds": 3},
+            pso_params={"n_particles": 15, "iterations": 20, "cv_folds": 3},
+            random_state=random_state,
         )
-        hybrid.train(X_train, y_train, X_val, y_val, verbose=verbose)
+        hybrid.train(X_train, y_train, verbose=verbose)
         m = hybrid.evaluate(X_test, y_test, verbose=verbose)
         results.append(_row("Hybrid GA-PSO-ANN", m))
-        roc_data["Hybrid GA-PSO-ANN"] = (m['fpr'], m['tpr'], m['auc'])
+        roc_data["Hybrid GA-PSO-ANN"] = (m["fpr"], m["tpr"], m["auc"])
         trained_models["Hybrid GA-PSO-ANN"] = hybrid
+        hybrid_params = hybrid.best_params
     except Exception as e:
-        print(f"Hybrid model training failed: {e}")
+        print(f"Hybrid training failed: {e}")
         results.append(_zero_row("Hybrid GA-PSO-ANN"))
 
-    df = pd.DataFrame(results)
+    # 5. XGBoost (ceiling reference) ---------------------------------
+    if _HAS_XGBOOST:
+        print("\n[5/6] Training XGBoost Baseline...")
+        try:
+            xgb = XGBoostBaseline(random_state=random_state)
+            xgb.train(X_train, y_train, verbose=verbose)
+            m = xgb.evaluate(X_test, y_test, verbose=verbose,
+                             model_name="XGBOOST BASELINE")
+            results.append(_row("XGBoost", m))
+            roc_data["XGBoost"] = (m["fpr"], m["tpr"], m["auc"])
+            trained_models["XGBoost"] = xgb
+        except Exception as e:
+            print(f"XGBoost failed: {e}")
+    else:
+        print("\n[5/6] Skipping XGBoost (package not installed).")
 
-    print("\n" + "=" * 80)
-    print("FINAL COMPARISON RESULTS")
-    print("=" * 80)
+    # 6. Seed-averaging ensemble of the best Hybrid config -----------
+    print("\n[6/6] Training Seed Ensemble (5× Hybrid config)...")
+    if hybrid_params:
+        try:
+            ens = SeedEnsembleANN(params=hybrid_params, n_models=5,
+                                  base_seed=random_state)
+            ens.train(X_train, y_train, verbose=verbose)
+            m = ens.evaluate(X_test, y_test, verbose=verbose,
+                             model_name="HYBRID SEED ENSEMBLE")
+            results.append(_row("Hybrid Ensemble", m))
+            roc_data["Hybrid Ensemble"] = (m["fpr"], m["tpr"], m["auc"])
+            trained_models["Hybrid Ensemble"] = ens
+        except Exception as e:
+            print(f"Ensemble training failed: {e}")
+            results.append(_zero_row("Hybrid Ensemble"))
+    else:
+        print("Skipping ensemble (no hybrid params available).")
+        results.append(_zero_row("Hybrid Ensemble"))
+
+    df = pd.DataFrame(results)
+    print("\n" + "=" * 80 + "\nFINAL COMPARISON RESULTS\n" + "=" * 80)
     print(df.to_string(index=False))
-    best_idx = df['Accuracy'].idxmax()
+    best_idx = df["Accuracy"].idxmax()
     print(f"\nBest Model : {df.loc[best_idx, 'Model']}")
     print(f"Accuracy   : {df.loc[best_idx, 'Accuracy']:.4f}")
     print(f"AUC        : {df.loc[best_idx, 'AUC']:.4f}")
     print("=" * 80)
-
     return df, roc_data, trained_models
-
-
-def _row(name, m):
-    return {
-        'Model': name,
-        'Accuracy': m['accuracy'], 'Precision': m['precision'],
-        'Recall': m['recall'], 'F1-Score': m['f1_score'],
-        'AUC': m['auc'],
-    }
-
-
-def _zero_row(name):
-    return {
-        'Model': name,
-        'Accuracy': 0.0, 'Precision': 0.0,
-        'Recall': 0.0, 'F1-Score': 0.0, 'AUC': 0.0,
-    }
 
 
 # ====================================================================
 # Cross-validation
 # ====================================================================
-def cross_validate_models(X, y, n_folds=5, random_state=42):
-    """Run stratified k-fold CV for all four model types."""
+def cross_validate_models(X, y, n_folds: int = 5, random_state: int = 42):
     print("\n" + "=" * 80)
     print(f"{n_folds}-FOLD CROSS-VALIDATION")
     print("=" * 80)
 
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True,
                           random_state=random_state)
-
-    model_names = [
-        "Baseline ANN", "GA-Optimized ANN",
-        "PSO-Optimized ANN", "Hybrid GA-PSO-ANN",
-    ]
-    cv_scores = {n: {'Accuracy': [], 'Precision': [], 'Recall': [],
-                      'F1-Score': [], 'AUC': []}
+    model_names = ["Baseline ANN", "GA-Optimized ANN", "PSO-Optimized ANN",
+                   "Hybrid GA-PSO-ANN"]
+    if _HAS_XGBOOST:
+        model_names.append("XGBoost")
+    cv_scores = {n: {k: [] for k in ["Accuracy", "Precision", "Recall",
+                                      "F1-Score", "AUC"]}
                  for n in model_names}
 
-    for fold, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
+    def _append(name, m):
+        cv_scores[name]["Accuracy"].append(m["accuracy"])
+        cv_scores[name]["Precision"].append(m["precision"])
+        cv_scores[name]["Recall"].append(m["recall"])
+        cv_scores[name]["F1-Score"].append(m["f1_score"])
+        cv_scores[name]["AUC"].append(m["auc"])
+
+    def _append_zero(name):
+        for k in cv_scores[name]:
+            cv_scores[name][k].append(0.0)
+
+    X = X.reset_index(drop=True) if hasattr(X, "reset_index") else pd.DataFrame(X)
+    y = y.reset_index(drop=True) if hasattr(y, "reset_index") else pd.Series(y)
+
+    for fold, (tr_idx, te_idx) in enumerate(skf.split(X, y), 1):
         print(f"\n--- Fold {fold}/{n_folds} ---")
-        X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
-        y_tr, y_te = y.iloc[train_idx], y.iloc[test_idx]
+        X_tr, X_te = X.iloc[tr_idx], X.iloc[te_idx]
+        y_tr, y_te = y.iloc[tr_idx], y.iloc[te_idx]
 
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_tr, y_tr, test_size=0.2, random_state=42, stratify=y_tr)
-
-        # Baseline ANN
         try:
-            ann = BaselineANN(hidden_layer_sizes=(100, 50), max_iter=300)
-            ann.train(X_train, y_train)
-            m = ann.evaluate(X_te, y_te, verbose=False)
-            _append_cv(cv_scores, "Baseline ANN", m)
+            ann = BaselineANN(hidden_layer_sizes=(100, 50), max_iter=400,
+                              random_state=random_state)
+            ann.train(X_tr, y_tr, verbose=False)
+            _append("Baseline ANN", ann.evaluate(X_te, y_te, verbose=False))
         except Exception:
-            _append_cv_zero(cv_scores, "Baseline ANN")
+            _append_zero("Baseline ANN")
 
-        # GA-ANN (reduced params for speed)
         try:
-            ga = GAOptimizer(X_train, y_train, X_val, y_val,
-                             n_population=25, n_generations=15,
-                             random_state=42)
+            ga = GAOptimizer(X_tr, y_tr, n_population=15, n_generations=10,
+                             cv_folds=3, eval_max_iter=150,
+                             random_state=random_state)
             ga.optimize(verbose=False)
             ga_ann = ga.get_optimized_ann()
-            ga_ann.train(X_train, y_train)
-            m = ga_ann.evaluate(X_te, y_te, verbose=False)
-            _append_cv(cv_scores, "GA-Optimized ANN", m)
+            ga_ann.train(X_tr, y_tr, verbose=False)
+            _append("GA-Optimized ANN", ga_ann.evaluate(X_te, y_te, verbose=False))
         except Exception:
-            _append_cv_zero(cv_scores, "GA-Optimized ANN")
+            _append_zero("GA-Optimized ANN")
 
-        # PSO-ANN (reduced params)
         try:
-            pso = PSOOptimizer(X_train, y_train, X_val, y_val,
-                               n_particles=15, iterations=20,
-                               random_state=42)
+            pso = PSOOptimizer(X_tr, y_tr, n_particles=12, iterations=12,
+                               cv_folds=3, eval_max_iter=150,
+                               random_state=random_state)
             pso.optimize(initial_ann=ann, verbose=False)
             pso_ann = pso.get_optimized_ann()
-            pso_ann.train(X_train, y_train)
-            m = pso_ann.evaluate(X_te, y_te, verbose=False)
-            _append_cv(cv_scores, "PSO-Optimized ANN", m)
+            pso_ann.train(X_tr, y_tr, verbose=False)
+            _append("PSO-Optimized ANN", pso_ann.evaluate(X_te, y_te, verbose=False))
         except Exception:
-            _append_cv_zero(cv_scores, "PSO-Optimized ANN")
+            _append_zero("PSO-Optimized ANN")
 
-        # Hybrid (reduced params)
         try:
-            hybrid = HybridGAPSOANN(
-                ga_params={'n_population': 25, 'n_generations': 15},
-                pso_params={'n_particles': 15, 'iterations': 20},
-                random_state=42)
-            hybrid.train(X_train, y_train, X_val, y_val, verbose=False)
-            m = hybrid.evaluate(X_te, y_te, verbose=False)
-            _append_cv(cv_scores, "Hybrid GA-PSO-ANN", m)
+            hyb = HybridGAPSOANN(
+                top_k=2,
+                ga_params={"n_population": 15, "n_generations": 10, "cv_folds": 3},
+                pso_params={"n_particles": 10, "iterations": 10, "cv_folds": 3},
+                random_state=random_state)
+            hyb.train(X_tr, y_tr, verbose=False)
+            _append("Hybrid GA-PSO-ANN", hyb.evaluate(X_te, y_te, verbose=False))
         except Exception:
-            _append_cv_zero(cv_scores, "Hybrid GA-PSO-ANN")
+            _append_zero("Hybrid GA-PSO-ANN")
 
-    # Build summary DataFrame
+        if _HAS_XGBOOST:
+            try:
+                xgb = XGBoostBaseline(random_state=random_state)
+                xgb.train(X_tr, y_tr, verbose=False)
+                _append("XGBoost", xgb.evaluate(X_te, y_te, verbose=False))
+            except Exception:
+                _append_zero("XGBoost")
+
     rows = []
     for name in model_names:
-        row = {'Model': name}
-        for metric in ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'AUC']:
+        row = {"Model": name}
+        for metric in ["Accuracy", "Precision", "Recall", "F1-Score", "AUC"]:
             vals = cv_scores[name][metric]
-            row[f'{metric}_mean'] = np.mean(vals)
-            row[f'{metric}_std']  = np.std(vals)
+            row[f"{metric}_mean"] = float(np.mean(vals))
+            row[f"{metric}_std"]  = float(np.std(vals))
         rows.append(row)
-
     cv_df = pd.DataFrame(rows)
 
-    print("\n" + "=" * 80)
-    print("CROSS-VALIDATION RESULTS  (mean ± std)")
-    print("=" * 80)
+    print("\n" + "=" * 80 + "\nCROSS-VALIDATION RESULTS (mean ± std)\n" + "=" * 80)
     for _, r in cv_df.iterrows():
         print(f"\n{r['Model']}:")
-        for metric in ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'AUC']:
-            print(f"  {metric:10s}: {r[f'{metric}_mean']:.4f} ± {r[f'{metric}_std']:.4f}")
+        for m in ["Accuracy", "Precision", "Recall", "F1-Score", "AUC"]:
+            print(f"  {m:10s}: {r[f'{m}_mean']:.4f} ± {r[f'{m}_std']:.4f}")
     print("=" * 80)
-
     return cv_df
-
-
-def _append_cv(cv_scores, name, m):
-    cv_scores[name]['Accuracy'].append(m['accuracy'])
-    cv_scores[name]['Precision'].append(m['precision'])
-    cv_scores[name]['Recall'].append(m['recall'])
-    cv_scores[name]['F1-Score'].append(m['f1_score'])
-    cv_scores[name]['AUC'].append(m['auc'])
-
-
-def _append_cv_zero(cv_scores, name):
-    for k in cv_scores[name]:
-        cv_scores[name][k].append(0.0)
 
 
 # ====================================================================
 # Plotting
 # ====================================================================
-def plot_results(comparison_df, roc_data, save_dir='results'):
+def plot_results(comparison_df: pd.DataFrame, roc_data: dict,
+                 save_dir: str = "results"):
     os.makedirs(save_dir, exist_ok=True)
 
-    # --- Bar chart ---
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(12, 6))
     x = np.arange(len(comparison_df))
     width = 0.15
-    metrics = ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'AUC']
+    metrics = ["Accuracy", "Precision", "Recall", "F1-Score", "AUC"]
     for i, metric in enumerate(metrics):
         ax.bar(x + i * width, comparison_df[metric], width, label=metric)
-    ax.set_xlabel('Models')
-    ax.set_ylabel('Score')
-    ax.set_title('Model Performance Comparison')
     ax.set_xticks(x + width * 2)
-    ax.set_xticklabels(comparison_df['Model'], rotation=30, ha='right')
-    ax.legend()
-    ax.grid(axis='y', alpha=0.3)
-    ax.set_ylim([0, 1])
+    ax.set_xticklabels(comparison_df["Model"], rotation=25, ha="right")
+    ax.set_ylabel("Score")
+    ax.set_title("Model Performance Comparison")
+    ax.legend(); ax.grid(axis="y", alpha=0.3); ax.set_ylim([0, 1])
     plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, 'comparison.png'), dpi=300)
+    plt.savefig(os.path.join(save_dir, "comparison.png"), dpi=300)
     print(f"Bar chart saved to {save_dir}/comparison.png")
 
-    # --- ROC curves ---
     fig, ax = plt.subplots(figsize=(8, 6))
-    colors = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA']
-    for (name, (fpr, tpr, auc)), color in zip(roc_data.items(), colors):
-        ax.plot(fpr, tpr, label=f'{name} (AUC={auc:.3f})', color=color)
-    ax.plot([0, 1], [0, 1], 'k--', alpha=0.3)
-    ax.set_xlabel('False Positive Rate')
-    ax.set_ylabel('True Positive Rate')
-    ax.set_title('ROC Curves')
-    ax.legend(loc='lower right')
-    ax.grid(alpha=0.3)
+    for name, (fpr, tpr, auc) in roc_data.items():
+        ax.plot(fpr, tpr, label=f"{name} (AUC={auc:.3f})")
+    ax.plot([0, 1], [0, 1], "k--", alpha=0.3)
+    ax.set_xlabel("False Positive Rate"); ax.set_ylabel("True Positive Rate")
+    ax.set_title("ROC Curves"); ax.legend(loc="lower right"); ax.grid(alpha=0.3)
     plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, 'roc_curves.png'), dpi=300)
+    plt.savefig(os.path.join(save_dir, "roc_curves.png"), dpi=300)
     print(f"ROC curves saved to {save_dir}/roc_curves.png")
 
 
 # ====================================================================
-# Save models for Streamlit UI
+# Model persistence
 # ====================================================================
-def save_all_models(trained_models, preprocessor, feature_names):
-    models_dir = os.path.join(os.path.dirname(__file__), 'models')
+def save_all_models(trained_models: dict, preprocessor: HeartDiseasePreprocessor,
+                    feature_names: list[str]):
+    models_dir = os.path.join(os.path.dirname(__file__), "models")
     os.makedirs(models_dir, exist_ok=True)
 
-    name_to_file = {
-        "Baseline ANN": "baseline_ann.joblib",
-        "GA-Optimized ANN": "ga_ann.joblib",
-        "PSO-Optimized ANN": "pso_ann.joblib",
-        "Hybrid GA-PSO-ANN": "hybrid_ann.joblib",
-    }
+    # Map display name → (filename, way to extract the raw predict model)
+    mapping: list[tuple[str, str, str]] = [
+        ("Baseline ANN",      "baseline_ann.joblib",     "sklearn"),
+        ("GA-Optimized ANN",  "ga_ann.joblib",           "sklearn"),
+        ("PSO-Optimized ANN", "pso_ann.joblib",          "sklearn"),
+        ("Hybrid GA-PSO-ANN", "hybrid_ann.joblib",       "sklearn"),
+        ("XGBoost",           "xgboost.joblib",          "sklearn"),
+        ("Hybrid Ensemble",   "hybrid_ensemble.joblib",  "ensemble"),
+    ]
 
-    for name, model_obj in trained_models.items():
-        fname = name_to_file.get(name)
-        if fname is None:
+    for display, fname, kind in mapping:
+        model = trained_models.get(display)
+        if model is None:
             continue
-        # For Hybrid, save the inner trained MLPClassifier
-        if hasattr(model_obj, 'final_model'):
-            joblib.dump(model_obj.final_model.model,
-                        os.path.join(models_dir, fname))
+        path = os.path.join(models_dir, fname)
+        if kind == "ensemble":
+            joblib.dump(model, path)
+        elif hasattr(model, "final_model"):
+            joblib.dump(model.final_model.model, path)
+        elif hasattr(model, "model"):
+            joblib.dump(model.model, path)
         else:
-            joblib.dump(model_obj.model,
-                        os.path.join(models_dir, fname))
+            joblib.dump(model, path)
         print(f"  Saved {fname}")
 
-    # Also save as 'ann_model.joblib' (legacy name used by save_model.py)
+    # Legacy alias used elsewhere.
     if "Baseline ANN" in trained_models:
         joblib.dump(trained_models["Baseline ANN"].model,
-                    os.path.join(models_dir, 'ann_model.joblib'))
+                    os.path.join(models_dir, "ann_model.joblib"))
 
-    joblib.dump(preprocessor.scaler,
-                os.path.join(models_dir, 'scaler.joblib'))
-    joblib.dump(preprocessor.label_encoders,
-                os.path.join(models_dir, 'label_encoders.joblib'))
-    joblib.dump(feature_names,
-                os.path.join(models_dir, 'feature_names.joblib'))
-    print("  Saved scaler, label_encoders, feature_names")
+    joblib.dump(preprocessor, os.path.join(models_dir, "preprocessor.joblib"))
+    joblib.dump(feature_names, os.path.join(models_dir, "feature_names.joblib"))
+    print("  Saved preprocessor + feature_names")
 
 
 # ====================================================================
@@ -339,26 +378,19 @@ def save_all_models(trained_models, preprocessor, feature_names):
 # ====================================================================
 def main():
     print("=" * 80)
-    print("HEART DISEASE PREDICTION SYSTEM — EXPERIMENT RUNNER")
+    print("HEART DISEASE PREDICTION SYSTEM — EXPERIMENT RUNNER (v2)")
     print("=" * 80)
 
     # --- Step 1: Load & preprocess ---
     print("\n[STEP 1] Loading and Preprocessing Data...")
-    print("-" * 80)
-
     preprocessor = HeartDiseasePreprocessor()
 
-    # Attempt to load all 4 UCI heart disease datasets (Cleveland,
-    # Hungarian, Switzerland, VA Long Beach) for ~920 samples.
-    search_dirs = ['heart disease', 'heart+disease', 'data']
+    search_dirs = ["heart disease", "heart+disease", "data"]
     site_files = [
-        'processed.cleveland.data',
-        'processed.hungarian.data',
-        'processed.switzerland.data',
-        'processed.va.data',
+        "processed.cleveland.data", "processed.hungarian.data",
+        "processed.switzerland.data", "processed.va.data",
     ]
-
-    all_paths = []
+    all_paths: list[str] = []
     for d in search_dirs:
         found = [os.path.join(d, f) for f in site_files
                  if os.path.exists(os.path.join(d, f))]
@@ -367,42 +399,19 @@ def main():
             break
 
     if len(all_paths) >= 2:
-        print(f"Found {len(all_paths)} dataset files — combining all sites")
-        X_train_full, X_test, y_train_full, y_test, feature_names = \
+        print(f"Found {len(all_paths)} dataset files — combining")
+        X_tr_full, X_test, y_tr_full, y_test, feature_names = \
             preprocessor.preprocess_pipeline(file_paths=all_paths)
     elif len(all_paths) == 1:
-        print(f"Dataset: {all_paths[0]}")
-        X_train_full, X_test, y_train_full, y_test, feature_names = \
+        X_tr_full, X_test, y_tr_full, y_test, feature_names = \
             preprocessor.preprocess_pipeline(file_path=all_paths[0])
     else:
-        # Fallback: try single cleveland file or download
-        single = None
-        for d in search_dirs:
-            for f in ['processed.cleveland.data', 'cleveland.data']:
-                c = os.path.join(d, f)
-                if os.path.exists(c):
-                    single = c
-                    break
-            if single:
-                break
-        if single:
-            print(f"Dataset: {single}")
-            X_train_full, X_test, y_train_full, y_test, feature_names = \
-                preprocessor.preprocess_pipeline(file_path=single)
-        else:
-            print("Downloading from UCI repository...")
-            try:
-                X_train_full, X_test, y_train_full, y_test, feature_names = \
-                    preprocessor.preprocess_pipeline()
-            except Exception as e:
-                print(f"\nError: {e}")
-                print("Place the datasets in 'heart+disease/' or install ucimlrepo")
-                return
+        print("Downloading from UCI...")
+        X_tr_full, X_test, y_tr_full, y_test, feature_names = \
+            preprocessor.preprocess_pipeline()
 
     X_train, X_val, y_train, y_val = train_test_split(
-        X_train_full, y_train_full,
-        test_size=0.2, random_state=42, stratify=y_train_full)
-
+        X_tr_full, y_tr_full, test_size=0.2, random_state=42, stratify=y_tr_full)
     print(f"\nTrain: {X_train.shape[0]}  Val: {X_val.shape[0]}  "
           f"Test: {X_test.shape[0]}  Features: {len(feature_names)}")
 
@@ -410,11 +419,9 @@ def main():
     print("\n[STEP 2] Running Model Comparison...")
     comparison_df, roc_data, trained_models = compare_models(
         X_train, y_train, X_val, y_val, X_test, y_test)
-
-    os.makedirs('results', exist_ok=True)
-    comparison_df.to_csv('results/comparison_results.csv', index=False)
-    joblib.dump(roc_data, 'results/roc_data.joblib')
-    print("Results saved to results/")
+    os.makedirs("results", exist_ok=True)
+    comparison_df.to_csv("results/comparison_results.csv", index=False)
+    joblib.dump(roc_data, "results/roc_data.joblib")
 
     # --- Step 3: Plots ---
     print("\n[STEP 3] Generating Plots...")
@@ -422,20 +429,18 @@ def main():
 
     # --- Step 4: Cross-validation ---
     print("\n[STEP 4] Cross-Validation...")
-
-    # Rebuild full preprocessed feature set for CV
-    X_full = pd.concat([X_train_full, X_test], ignore_index=True)
-    y_full = pd.concat([y_train_full, y_test], ignore_index=True)
+    X_full = pd.concat([X_tr_full, X_test], ignore_index=True)
+    y_full = pd.concat([y_tr_full, y_test], ignore_index=True)
     cv_df = cross_validate_models(X_full, y_full, n_folds=5)
-    cv_df.to_csv('results/cv_results.csv', index=False)
+    cv_df.to_csv("results/cv_results.csv", index=False)
     print("CV results saved to results/cv_results.csv")
 
-    # --- Step 5: Save models for UI ---
-    print("\n[STEP 5] Saving Models for Web UI...")
+    # --- Step 5: Save models ---
+    print("\n[STEP 5] Saving Models for Web UI / API...")
     save_all_models(trained_models, preprocessor, feature_names)
 
     print("\n" + "=" * 80)
-    print("EXPERIMENT COMPLETE!  Next: streamlit run app.py")
+    print("EXPERIMENT COMPLETE. Next: streamlit run app.py  |  uvicorn api:app")
     print("=" * 80)
 
 

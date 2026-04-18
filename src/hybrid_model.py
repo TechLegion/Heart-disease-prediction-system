@@ -1,146 +1,194 @@
 """
-Hybrid GA-PSO-ANN Model for Heart Disease Prediction
+Hybrid GA-PSO-ANN Model for Heart Disease Prediction.
 
 Three-stage optimisation pipeline:
-  Stage 1 – GA   : searches architecture + learning-rate space
-  Stage 2 – PSO  : fine-tunes learning-rate + L2-regularisation for
-                    the GA-selected architecture
-  Stage 3 – Final: trains the ANN with all optimised hyper-parameters
+  Stage 1 — GA: evolves a population of architectures + training params,
+                returns the TOP-K distinct architectures.
+  Stage 2 — PSO: fine-tunes training hyperparameters (lr, alpha, momentum)
+                 for each of the K GA candidates. The best CV score wins.
+  Stage 3 — Final model trained with the winning config.
 
-Based on the methodology described in the research proposal.
+This fixes the key weakness of the v1 Hybrid: we no longer commit to a single
+GA architecture before PSO, so a slightly-worse GA candidate with much better
+training-parameter potential can still win.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 import numpy as np
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import accuracy_score
+
 from baseline_ann import BaselineANN
 from ga_optimizer import GAOptimizer
 from pso_optimizer import PSOOptimizer
-from sklearn.metrics import accuracy_score
 import warnings
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
 
 class HybridGAPSOANN:
-    """Hybrid GA-PSO-ANN model."""
+    """GA → top-K → PSO-per-candidate → best-of-K → final training."""
 
-    def __init__(self, hidden_layer_sizes=(100, 50),
-                 ga_params=None, pso_params=None,
-                 random_state=42):
-        self.hidden_layer_sizes = hidden_layer_sizes
+    def __init__(self, top_k: int = 3,
+                 ga_params: dict[str, Any] | None = None,
+                 pso_params: dict[str, Any] | None = None,
+                 cv_folds: int = 3, random_state: int = 42):
+        self.top_k = top_k
         self.random_state = random_state
+        self.cv_folds = cv_folds
 
         _default_ga = {
-            'n_population': 30, 'n_generations': 20,
-            'crossover_prob': 0.7, 'mutation_prob': 0.2,
+            "n_population": 30, "n_generations": 20,
+            "crossover_prob": 0.7, "mutation_prob": 0.25,
+            "cv_folds": cv_folds, "elitism": 2,
         }
         self.ga_params = {**_default_ga, **(ga_params or {})}
 
         _default_pso = {
-            'n_particles': 20, 'iterations': 30,
-            'options': {'c1': 0.5, 'c2': 0.3, 'w': 0.9},
+            "n_particles": 15, "iterations": 20,
+            "cv_folds": cv_folds,
+            "options": {"c1": 0.5, "c2": 0.3, "w": 0.9},
         }
         self.pso_params = {**_default_pso, **(pso_params or {})}
 
-        self.ga_optimizer = None
-        self.pso_optimizer = None
-        self.final_model = None
-        self.ga_history = None
-        self.pso_history = None
-        self.best_params = {}
+        self.ga_optimizer: GAOptimizer | None = None
+        self.pso_runs: list[dict[str, Any]] = []
+        self.final_model: BaselineANN | None = None
+        self.best_params: dict[str, Any] = {}
+        self.ga_history: list[float] | None = None
+        self.pso_history: list[float] | None = None
 
     # ------------------------------------------------------------------ #
-    #  Training pipeline                                                  #
+    def _cv_accuracy(self, model_factory, X, y) -> float:
+        X = np.asarray(X); y = np.asarray(y)
+        skf = StratifiedKFold(n_splits=self.cv_folds, shuffle=True,
+                              random_state=self.random_state)
+        scores = []
+        for tr, va in skf.split(X, y):
+            ann = model_factory()
+            ann.train(X[tr], y[tr], verbose=False)
+            scores.append(accuracy_score(y[va], ann.predict(X[va])))
+        return float(np.mean(scores))
+
     # ------------------------------------------------------------------ #
-    def train(self, X_train, y_train, X_val, y_val, verbose=True):
+    def train(self, X_train, y_train, X_val=None, y_val=None,
+              verbose: bool = True):
         print("\n" + "=" * 70)
-        print("HYBRID GA-PSO-ANN MODEL TRAINING")
+        print("HYBRID GA-PSO-ANN MODEL TRAINING (v2: top-K GA → PSO)")
         print("=" * 70)
 
-        # ---- Stage 1: GA — architecture + learning-rate search --------
+        # --- Stage 1: GA -------------------------------------------------
         if verbose:
             print("\n[STAGE 1] Genetic Algorithm — architecture search")
-            print("-" * 70)
-
         self.ga_optimizer = GAOptimizer(
-            X_train, y_train, X_val, y_val,
-            n_population=self.ga_params['n_population'],
-            n_generations=self.ga_params['n_generations'],
-            crossover_prob=self.ga_params['crossover_prob'],
-            mutation_prob=self.ga_params['mutation_prob'],
+            X_train, y_train,
+            n_population=self.ga_params["n_population"],
+            n_generations=self.ga_params["n_generations"],
+            crossover_prob=self.ga_params["crossover_prob"],
+            mutation_prob=self.ga_params["mutation_prob"],
+            cv_folds=self.ga_params["cv_folds"],
+            elitism=self.ga_params["elitism"],
             random_state=self.random_state,
         )
-        ga_results = self.ga_optimizer.optimize(verbose=verbose)
-        self.ga_history = ga_results['fitness_history']
-        ga_params = self.ga_optimizer.get_best_params()
+        ga_result = self.ga_optimizer.optimize(verbose=verbose)
+        self.ga_history = ga_result["fitness_history"]
 
-        ga_ann = self.ga_optimizer.get_optimized_ann()
-        ga_ann.train(X_train, y_train)
-        ga_val_acc = accuracy_score(y_val, ga_ann.predict(X_val))
+        top_params = self.ga_optimizer.get_topk_params(k=self.top_k)
+        print(f"\nGA returned {len(top_params)} top candidates:")
+        for i, p in enumerate(top_params, 1):
+            print(f"  #{i}: arch={p['hidden_layer_sizes']}  act={p['activation']}  "
+                  f"lr={p['learning_rate']:.5f}  α={p['alpha']:.1e}")
+
+        # --- Stage 2: PSO per candidate ---------------------------------
         if verbose:
-            print(f"\nGA validation accuracy: {ga_val_acc:.4f}")
+            print("\n[STAGE 2] PSO fine-tuning for each GA candidate")
+        best_overall = {"cv_score": -np.inf, "params": None, "config_idx": -1}
 
-        # ---- Stage 2: PSO — fine-tune lr + alpha ---------------------
+        for idx, params in enumerate(top_params, 1):
+            print(f"\n  --- PSO on candidate #{idx} "
+                  f"(arch={params['hidden_layer_sizes']}, "
+                  f"act={params['activation']}) ---")
+            seed_ann = BaselineANN(
+                hidden_layer_sizes=params["hidden_layer_sizes"],
+                activation=params["activation"],
+                learning_rate_init=params["learning_rate"],
+                alpha=params["alpha"],
+                random_state=self.random_state,
+            )
+            pso = PSOOptimizer(
+                X_train, y_train,
+                n_particles=self.pso_params["n_particles"],
+                iterations=self.pso_params["iterations"],
+                base_params={
+                    "hidden_layer_sizes": params["hidden_layer_sizes"],
+                    "activation": params["activation"],
+                },
+                cv_folds=self.pso_params["cv_folds"],
+                options=self.pso_params["options"],
+                random_state=self.random_state,
+            )
+            pso_result = pso.optimize(initial_ann=seed_ann, verbose=False)
+            cv_score = pso_result["best_fitness"]
+            best_tp = pso_result["best_params"]
+
+            self.pso_runs.append({
+                "candidate": params,
+                "cv_score": cv_score,
+                "best_training_params": best_tp,
+                "history": pso_result["fitness_history"],
+            })
+
+            print(f"    CV acc = {cv_score:.4f}  "
+                  f"(lr={best_tp['learning_rate']:.5f}, "
+                  f"α={best_tp['alpha']:.1e}, "
+                  f"momentum={best_tp['momentum']:.3f})")
+
+            if cv_score > best_overall["cv_score"]:
+                best_overall["cv_score"] = cv_score
+                best_overall["params"] = {
+                    "hidden_layer_sizes": params["hidden_layer_sizes"],
+                    "activation": params["activation"],
+                    **best_tp,
+                }
+                best_overall["config_idx"] = idx
+                self.pso_history = pso_result["fitness_history"]
+
+        self.best_params = best_overall["params"] or {}
+        print(f"\nBest Hybrid config (CV acc = {best_overall['cv_score']:.4f}): "
+              f"candidate #{best_overall['config_idx']} → {self.best_params}")
+
+        # --- Stage 3: Final training -----------------------------------
         if verbose:
-            print("\n[STAGE 2] PSO — fine-tuning training parameters")
-            print("-" * 70)
-
-        self.pso_optimizer = PSOOptimizer(
-            X_train, y_train, X_val, y_val,
-            n_particles=self.pso_params['n_particles'],
-            iterations=self.pso_params['iterations'],
-            hidden_layer_sizes=ga_params['hidden_layer_sizes'],
-            options=self.pso_params['options'],
-            random_state=self.random_state,
-        )
-        pso_results = self.pso_optimizer.optimize(
-            initial_ann=ga_ann, verbose=verbose,
-        )
-        self.pso_history = pso_results['fitness_history']
-        pso_params = self.pso_optimizer.get_best_params()
-
-        # ---- Stage 3: Train final model with all optimised params ----
-        if verbose:
-            print("\n[STAGE 3] Final model training with optimised parameters")
-            print("-" * 70)
-
-        self.best_params = {
-            'hidden_layer_sizes': ga_params['hidden_layer_sizes'],
-            'learning_rate': pso_params['learning_rate'],
-            'alpha': pso_params['alpha'],
-        }
-
+            print("\n[STAGE 3] Final training with best hybrid config")
         self.final_model = BaselineANN(
-            hidden_layer_sizes=self.best_params['hidden_layer_sizes'],
-            max_iter=1000,
-            learning_rate_init=self.best_params['learning_rate'],
-            random_state=self.random_state,
+            hidden_layer_sizes=self.best_params["hidden_layer_sizes"],
+            activation=self.best_params["activation"],
+            learning_rate_init=self.best_params["learning_rate"],
+            alpha=self.best_params["alpha"],
+            momentum=self.best_params["momentum"],
+            max_iter=1000, random_state=self.random_state,
+            early_stopping=True,
         )
-        self.final_model.model.alpha = self.best_params['alpha']
-        self.final_model.train(X_train, y_train)
-
-        final_acc = accuracy_score(y_val, self.final_model.predict(X_val))
-        if verbose:
-            print(f"Final hybrid model validation accuracy: {final_acc:.4f}")
-            print(f"Optimised parameters: {self.best_params}")
-            print("=" * 70)
-
+        self.final_model.train(X_train, y_train, verbose=False)
+        print("=" * 70)
         return self
 
     # ------------------------------------------------------------------ #
-    #  Inference / evaluation                                             #
-    # ------------------------------------------------------------------ #
     def predict(self, X):
         if self.final_model is None:
-            raise ValueError("Model not trained yet. Call train() first.")
+            raise ValueError("Model not trained yet.")
         return self.final_model.predict(X)
 
     def predict_proba(self, X):
         if self.final_model is None:
-            raise ValueError("Model not trained yet. Call train() first.")
+            raise ValueError("Model not trained yet.")
         return self.final_model.predict_proba(X)
 
-    def evaluate(self, X_test, y_test, verbose=True):
+    def evaluate(self, X_test, y_test, verbose: bool = True):
         if self.final_model is None:
-            raise ValueError("Model not trained yet. Call train() first.")
+            raise ValueError("Model not trained yet.")
         return self.final_model.evaluate(
             X_test, y_test, verbose=verbose,
             model_name="HYBRID GA-PSO-ANN",
@@ -148,28 +196,20 @@ class HybridGAPSOANN:
 
     def get_optimization_history(self):
         return {
-            'ga_fitness_history': self.ga_history,
-            'pso_fitness_history': self.pso_history,
+            "ga_fitness_history": self.ga_history,
+            "pso_fitness_history": self.pso_history,
+            "pso_runs": self.pso_runs,
         }
 
 
 if __name__ == "__main__":
     from data_preprocessing import HeartDiseasePreprocessor
-    from sklearn.model_selection import train_test_split
-
-    preprocessor = HeartDiseasePreprocessor()
-    try:
-        X_tr_full, X_test, y_tr_full, y_test, _ = \
-            preprocessor.preprocess_pipeline()
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_tr_full, y_tr_full, test_size=0.2,
-            random_state=42, stratify=y_tr_full)
-
-        hybrid = HybridGAPSOANN(
-            ga_params={'n_population': 15, 'n_generations': 10},
-            pso_params={'n_particles': 10, 'iterations': 10},
-        )
-        hybrid.train(X_train, y_train, X_val, y_val)
-        hybrid.evaluate(X_test, y_test)
-    except Exception as e:
-        import traceback; traceback.print_exc()
+    pp = HeartDiseasePreprocessor()
+    X_tr, X_te, y_tr, y_te, _ = pp.preprocess_pipeline()
+    hybrid = HybridGAPSOANN(
+        top_k=2,
+        ga_params={"n_population": 15, "n_generations": 8},
+        pso_params={"n_particles": 8, "iterations": 8},
+    )
+    hybrid.train(X_tr, y_tr)
+    hybrid.evaluate(X_te, y_te)

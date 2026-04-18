@@ -8,9 +8,11 @@ An improved heart disease prediction system that combines **Genetic Algorithm (G
 |---|---|
 | **Dataset** | UCI Heart Disease — Cleveland, Hungarian, Switzerland & VA Long Beach (combined ~920 samples) |
 | **Baseline** | Multi-layer Perceptron (scikit-learn `MLPClassifier`) |
-| **GA Optimization** | Evolves hidden-layer architecture and learning rate using DEAP |
-| **PSO Optimization** | Fine-tunes learning rate and L2 regularization using PySwarms |
-| **Hybrid GA-PSO-ANN** | Sequential pipeline — GA selects architecture, PSO refines training params |
+| **GA Optimization** | Evolves architecture, learning rate, L2 and activation; fitness = **3-fold CV accuracy** |
+| **PSO Optimization** | Fine-tunes learning rate, L2 and **momentum**; fitness = **3-fold CV accuracy** |
+| **Hybrid GA-PSO-ANN** | GA returns **top-K** architectures → PSO refines each → best CV wins → final retrain |
+| **Seed Ensemble** | 5× retrain of the best Hybrid config with different seeds; **average probabilities** |
+| **XGBoost (optional)** | Tree-based ceiling reference — `pip install xgboost` if your network allows the large wheel |
 | **Evaluation** | Accuracy, Precision, Recall, F1-Score, ROC AUC, 5-fold Stratified CV |
 | **Web UI** | Interactive Streamlit app for prediction, model comparison, and methodology |
 
@@ -28,11 +30,14 @@ An improved heart disease prediction system that combines **Genetic Algorithm (G
 │   ├── baseline_ann.py          # BaselineANN wrapper around MLPClassifier
 │   ├── ga_optimizer.py          # GA hyperparameter optimizer (DEAP)
 │   ├── pso_optimizer.py         # PSO hyperparameter optimizer (PySwarms)
-│   ├── hybrid_model.py          # Hybrid GA → PSO → ANN pipeline
+│   ├── hybrid_model.py          # Hybrid GA → top-K → PSO → ANN pipeline
+│   ├── ensemble_model.py        # Seed-averaging ensemble
+│   ├── xgboost_baseline.py      # Optional XGBoost ceiling reference
 │   └── save_model.py            # Standalone model saving utility
 ├── models/                      # Saved trained models (generated)
 ├── results/                     # Metrics CSVs, plots, ROC data (generated)
 ├── app.py                       # Streamlit web application
+├── api.py                       # FastAPI JSON backend (for React)
 ├── main.py                      # Full experiment runner
 ├── requirements.txt             # Python dependencies
 └── README.md
@@ -66,11 +71,11 @@ python main.py
 
 This will:
 1. Load and combine all four UCI heart disease datasets
-2. Train and evaluate four models — Baseline ANN, GA-ANN, PSO-ANN, Hybrid GA-PSO-ANN
+2. Train and evaluate **Baseline ANN, GA-ANN, PSO-ANN, Hybrid GA-PSO-ANN, Hybrid Seed Ensemble** (and **XGBoost** if installed)
 3. Run 5-fold stratified cross-validation
-4. Save trained models to `models/` and results to `results/`
+4. Save trained models + the fitted `preprocessor.joblib` to `models/` and metrics to `results/`
 
-> **Note**: Training takes several minutes due to the optimization search.
+> **Note**: Full training can take **30–60+ minutes** on a laptop because every GA/PSO fitness evaluation retrains an ANN under 3-fold CV.
 
 ### Launch the Web App
 
@@ -85,19 +90,29 @@ The app has three pages:
 
 > You must run `python main.py` first to generate the trained models and results files.
 
+### Launch the JSON API (React-ready)
+
+```bash
+uvicorn api:app --reload --port 8000
+```
+
+Open `http://localhost:8000/docs` for interactive Swagger documentation.
+
 ## Methodology
 
-1. **Data Preprocessing**: Missing-value imputation, duplicate removal, label encoding, Z-score normalization, target binarization (heart disease present / absent), 80/20 train-test split.
+1. **Data Preprocessing**: KNN imputation, duplicate removal, **one-hot encoding of nominal columns** (`cp`, `restecg`, `slope`, `thal`), Z-score scaling of continuous features, target binarisation, 80/20 stratified train-test split.
 
 2. **Baseline ANN**: 2-layer MLP (100, 50 neurons), ReLU activation, Adam optimizer, early stopping.
 
-3. **GA Optimization (DEAP)**: Evolves a population of chromosomes encoding `learning_rate_init`, `hidden_layer_1` size, and `hidden_layer_2` size. Fitness = validation accuracy. Uses tournament selection, two-point crossover, and Gaussian mutation.
+3. **GA Optimization (DEAP)**: Evolves `learning_rate`, hidden-layer sizes, L2 (`alpha`) and **activation**. Fitness = **mean 3-fold CV accuracy** on the training fold. Elitism + tournament selection.
 
-4. **PSO Optimization (PySwarms)**: Particles encode `learning_rate_init` and L2 regularization strength (`alpha`). Initialized near the GA-found learning rate. Minimizes negative validation accuracy.
+4. **PSO Optimization (PySwarms)**: 3-D particle space (`learning_rate`, `alpha`, **momentum**). Fitness = **3-fold CV accuracy**.
 
-5. **Hybrid GA-PSO-ANN**: GA finds the best architecture → PSO fine-tunes the training parameters for that architecture → final model is trained with all optimized hyperparameters.
+5. **Hybrid GA-PSO-ANN**: GA produces **top-K distinct architectures** → each gets its own PSO run → configuration with the best CV score is selected for the final full training.
 
-6. **Evaluation**: All models assessed on the same held-out test set using Accuracy, Precision, Recall, F1, and ROC AUC. Robustness confirmed with 5-fold stratified cross-validation.
+6. **Seed Ensemble**: The winning Hybrid hyperparameters are retrained 5× with seeds 42–46; inference averages `predict_proba`.
+
+7. **Evaluation**: All models assessed on the same held-out test set using Accuracy, Precision, Recall, F1, and ROC AUC. Robustness confirmed with 5-fold stratified cross-validation.
 
 ## Dependencies
 
