@@ -11,13 +11,12 @@ ENV/
 dist/
 build/
 
-# Trained models (regenerate with: python main.py)
-models/
-*.joblib
+# Trained models under models/ are committed for Railway. Regenerate: python main.py
 
-# Generated binary results (regenerate with: python main.py)
+# Plots; joblib in results/ except Roc bundle (served by /api/roc)
 results/*.png
 results/*.joblib
+!results/roc_data.joblib
 
 # Logs
 *.log
