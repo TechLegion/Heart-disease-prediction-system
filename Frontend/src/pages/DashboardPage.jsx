@@ -14,6 +14,10 @@ import Avatar from '../components/common/Avatar';
 const Wrapper = styled.div`
   display: grid;
   gap: 18px;
+
+  @media (max-width: 767px) {
+    gap: 14px;
+  }
 `;
 
 const Header = styled.div`
@@ -21,11 +25,20 @@ const Header = styled.div`
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
+
+  @media (max-width: 767px) {
+    flex-direction: column;
+    gap: 12px;
+  }
 `;
 
 const Title = styled.h1`
   font-size: 22px;
   color: ${({ theme }) => theme.colors.textPrimary};
+
+  @media (max-width: 767px) {
+    font-size: 18px;
+  }
 `;
 
 const Subtitle = styled.div`
@@ -37,6 +50,11 @@ const Subtitle = styled.div`
 const HeaderActions = styled.div`
   display: flex;
   gap: 8px;
+
+  @media (max-width: 767px) {
+    width: 100%;
+    justify-content: flex-end;
+  }
 `;
 
 const Metrics = styled.div`
@@ -47,10 +65,18 @@ const Metrics = styled.div`
   @media (max-width: 980px) {
     grid-template-columns: 1fr;
   }
+
+  @media (max-width: 767px) {
+    gap: 10px;
+  }
 `;
 
 const ChartCard = styled(Card)`
   padding: 16px;
+
+  @media (max-width: 767px) {
+    padding: 14px;
+  }
 `;
 
 const Row = styled.div`
@@ -58,6 +84,11 @@ const Row = styled.div`
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+
+  @media (max-width: 767px) {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
 `;
 
 const SectionTitle = styled.h3`

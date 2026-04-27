@@ -7,6 +7,8 @@ const StyledAvatar = styled.div`
   display: grid;
   place-items: center;
   font-weight: 600;
+  font-size: ${({ size = 44 }) => `${Math.max(12, size / 2.2)}px`};
+  line-height: 1;
   color: #fff;
   background: ${({ variant, theme }) => {
     if (variant === 'detected') return theme.colors.orange;

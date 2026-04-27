@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import styled from 'styled-components';
-import { BarChart3, Heart, LayoutGrid, PlusCircle, Settings, User, Users } from 'lucide-react';
+import { Heart, LayoutGrid, PlusCircle, Users } from 'lucide-react';
 import { getInitials } from '../../utils/formatters';
 import { useAuth } from '../../hooks/useAuth';
 import { usePatients } from '../../hooks/usePatients';
@@ -67,7 +67,6 @@ const items = [
   { to: '/dashboard', icon: LayoutGrid },
   { to: '/patients', icon: Users },
   { to: '/predict', icon: PlusCircle },
-  { to: '/dashboard', icon: BarChart3 },
 ];
 
 export const Sidebar = () => {
@@ -83,6 +82,15 @@ export const Sidebar = () => {
         <Heart size={18} />
       </Brand>
 
+      <button
+        type="button"
+        onClick={logout}
+        aria-label="Sign out"
+        style={{ background: 'transparent', border: 0, cursor: 'pointer', marginBottom: 12 }}
+      >
+        <Avatar size={36} initials={initials} variant="detected" />
+      </button>
+
       <Group>
         {items.map(({ to, icon: Icon }, index) => (
           <RailIcon key={`${to}-${index}`} to={to} state={{ from: location }}>
@@ -91,18 +99,7 @@ export const Sidebar = () => {
         ))}
       </Group>
 
-      <Bottom>
-        <RailIcon to="/dashboard" aria-label="profile"><User size={16} /></RailIcon>
-        <RailIcon to="/dashboard" aria-label="settings"><Settings size={16} /></RailIcon>
-        <button
-          type="button"
-          onClick={logout}
-          aria-label="Sign out"
-          style={{ background: 'transparent', border: 0, cursor: 'pointer' }}
-        >
-          <Avatar size={28} initials={initials} variant="detected" />
-        </button>
-      </Bottom>
+      <Bottom />
     </Shell>
   );
 };

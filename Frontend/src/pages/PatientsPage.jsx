@@ -6,7 +6,7 @@ import Card from '../components/common/Card';
 import Badge from '../components/common/Badge';
 import { Skeleton } from '../components/common/Skeleton';
 import { usePatients } from '../hooks/usePatients';
-import { formatShortDate, getInitials } from '../utils/formatters';
+import { formatShortDate, getInitials, getSeverityLevel } from '../utils/formatters';
 import Avatar from '../components/common/Avatar';
 
 const Wrapper = styled.div`
@@ -62,10 +62,18 @@ const Grid = styled.div`
   @media (max-width: 980px) {
     grid-template-columns: 1fr;
   }
+
+  @media (max-width: 767px) {
+    gap: 10px;
+  }
 `;
 
 const PatientCard = styled(Card)`
   padding: 16px;
+
+  @media (max-width: 767px) {
+    padding: 14px;
+  }
 `;
 
 const Top = styled.div`
@@ -173,8 +181,14 @@ export default function PatientsPage() {
                 <div style={{ fontSize: 12, color: '#888' }}>Risk</div>
                 <Progress><Fill $value={risk} $detected={detected} /></Progress>
                 <div style={{ marginTop: 6, fontSize: 12 }}>{risk.toFixed(1)}%</div>
-                <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 12, color: '#888' }}>{formatShortDate(patient.createdAt)}</span>
+                <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 12, color: '#888' }}>{formatShortDate(patient.createdAt)}</span>
+                    {(() => {
+                      const sev = getSeverityLevel(patient.probability_disease || 0);
+                      return <Badge size="sm" variant={sev.level.toLowerCase()}>{sev.label}</Badge>;
+                    })()}
+                  </div>
                   <span style={{ fontSize: 12, color: '#e8734a' }}>View →</span>
                 </div>
               </PatientCard>

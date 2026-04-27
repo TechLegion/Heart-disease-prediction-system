@@ -30,3 +30,11 @@ export const getInitials = (name = '') => {
 export const percent = (value, digits = 1) => `${(Number(value || 0) * 100).toFixed(digits)}%`;
 
 export const buildPatientAgeSex = (patient) => `${patient.age ?? '--'} · ${patient.sex ?? '--'}`;
+
+export const getSeverityLevel = (probabilityDisease = 0) => {
+  const prob = Number(probabilityDisease) * 100;
+  if (prob <= 25) return { level: 'NORMAL', label: 'Normal', bg: '#eef7ee', text: '#3a8a3a', color: 'green' };
+  if (prob <= 50) return { level: 'LOW_RISK', label: 'Low Risk', bg: '#e8f7f5', text: '#3ab5a0', color: 'teal' };
+  if (prob <= 75) return { level: 'MEDIUM_RISK', label: 'Medium Risk', bg: '#fff8e1', text: '#f59e0b', color: 'amber' };
+  return { level: 'HIGH_RISK', label: 'High Risk', bg: 'rgba(232,83,110,0.12)', text: '#e8536e', color: 'red' };
+};

@@ -135,9 +135,9 @@ function DashboardAnalyticsPanel({ patients }) {
       </div>
       <DarkCard>
         <Muted>Disease probability</Muted>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, marginTop: 8 }}>
           <input value={latest?.name || 'No patient'} readOnly style={{ background: '#151525', border: 0, borderRadius: 8, color: '#fff', padding: '8px 10px', fontSize: 11 }} />
-          <input value={latest?.patientData?.age || '--'} readOnly style={{ background: '#151525', border: 0, borderRadius: 8, color: '#fff', padding: '8px 10px', fontSize: 11 }} />
+          <input value={latest?.patientData?.age || '--'} readOnly style={{ background: '#151525', border: 0, borderRadius: 8, color: '#fff', padding: '8px 10px', fontSize: 11, width: '50px' }} />
         </div>
         <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <strong style={{ color: '#fff', fontSize: 20 }}>{((latest?.probability_disease || 0) * 100).toFixed(1)}%</strong>

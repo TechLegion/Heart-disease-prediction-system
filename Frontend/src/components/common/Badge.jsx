@@ -4,27 +4,42 @@ const badgeVariants = {
   detected: css`
     background: ${({ theme }) => theme.colors.orangeLight};
     color: ${({ theme }) => theme.colors.orange};
-    border-color: rgba(232,115,74,0.3);
+    border-color: rgba(232, 115, 74, 0.3);
   `,
   healthy: css`
     background: ${({ theme }) => theme.colors.tealLight};
     color: ${({ theme }) => theme.colors.teal};
-    border-color: rgba(58,181,160,0.3);
+    border-color: rgba(58, 181, 160, 0.3);
   `,
   risk: css`
     background: ${({ theme }) => theme.colors.pinkLight};
     color: ${({ theme }) => theme.colors.pink};
-    border-color: rgba(232,83,110,0.3);
+    border-color: rgba(232, 83, 110, 0.3);
   `,
   normal: css`
     background: #eef7ee;
     color: #3a8a3a;
-    border-color: rgba(58,138,58,0.3);
+    border-color: rgba(58, 138, 58, 0.3);
+  `,
+  lowRisk: css`
+    background: #e8f7f5;
+    color: #3ab5a0;
+    border-color: rgba(58, 181, 160, 0.3);
+  `,
+  mediumRisk: css`
+    background: #fff8e1;
+    color: #f59e0b;
+    border-color: rgba(245, 158, 11, 0.3);
+  `,
+  highRisk: css`
+    background: rgba(232, 83, 110, 0.12);
+    color: #e8536e;
+    border-color: rgba(232, 83, 110, 0.3);
   `,
   warning: css`
     background: ${({ theme }) => theme.colors.orangeLight};
     color: ${({ theme }) => theme.colors.orange};
-    border-color: rgba(232,115,74,0.3);
+    border-color: rgba(232, 115, 74, 0.3);
   `,
   neutral: css`
     background: #f4f4f4;

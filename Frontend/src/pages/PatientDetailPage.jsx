@@ -13,7 +13,7 @@ import { ProbabilityBar } from '../components/charts/ProbabilityBar';
 import { RiskGauge } from '../components/charts/RiskGauge';
 import { fetchPatientById } from '../services/patients';
 import { usePatients } from '../hooks/usePatients';
-import { formatShortDate, getInitials } from '../utils/formatters';
+import { formatShortDate, getInitials, getSeverityLevel } from '../utils/formatters';
 
 const Wrapper = styled.div`
   display: grid;
@@ -32,6 +32,10 @@ const BackLink = styled.button`
 
 const HeadCard = styled(Card)`
   padding: 16px;
+
+  @media (max-width: 767px) {
+    padding: 14px;
+  }
 `;
 
 const Head = styled.div`
@@ -40,6 +44,12 @@ const Head = styled.div`
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
+
+  @media (max-width: 767px) {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
 `;
 
 const Name = styled.h1`
@@ -61,6 +71,10 @@ const Content = styled.div`
   @media (max-width: 1020px) {
     grid-template-columns: 1fr;
   }
+
+  @media (max-width: 767px) {
+    gap: 10px;
+  }
 `;
 
 const Section = styled(Card)`
@@ -80,6 +94,119 @@ const Td = styled.td`
 
 const Key = styled(Td)`
   color: #888;
+`;
+
+const SeverityBar = styled.div`
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #3a8a3a, #f59e0b, #e8536e);
+  margin-top: 6px;
+  position: relative;
+  overflow: hidden;
+
+  @media (max-width: 767px) {
+    margin-top: 4px;
+  }
+`;
+
+const SeverityLabel = styled.div`
+  font-size: 11px;
+  color: ${({ theme }) => theme.colors.textSecondary};
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-top: 6px;
+  margin-bottom: 4px;
+
+  @media (max-width: 767px) {
+    font-size: 10px;
+  }
+`;
+
+const SectionTitle = styled.h3`
+  margin: 0 0 10px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: ${({ theme }) => theme.colors.textPrimary};
+
+  @media (max-width: 767px) {
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+`;
+
+const RiskFactorCard = styled(Card)`
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+
+  @media (max-width: 767px) {
+    padding: 10px;
+  }
+`;
+
+const RiskFactorRow = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+`;
+
+const RiskFactorLabel = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  color: ${({ theme }) => theme.colors.textPrimary};
+`;
+
+const RiskFactorValue = styled.div`
+  font-family: 'Fira Code', monospace;
+  color: ${({ theme }) => theme.colors.orange};
+  font-weight: 600;
+
+  @media (max-width: 767px) {
+    font-size: 12px;
+  }
+`;
+
+const RiskFactorNormal = styled.div`
+  margin-top: 4px;
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-size: 12px;
+`;
+
+const EmptyState = styled(Card)`
+  padding: 12px;
+  background: ${({ theme }) => theme.colors.tealLight};
+  color: ${({ theme }) => theme.colors.teal};
+  text-align: center;
+  font-size: 12px;
+`;
+
+const MetricRow = styled.div`
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 12px;
+
+  @media (max-width: 1020px) {
+    grid-template-columns: 1fr;
+  }
+
+  @media (max-width: 767px) {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+`;
+
+const SeverityDot = styled.span`
+  position: absolute;
+  top: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fff;
+  transform: translateX(-50%);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 `;
 
 export default function PatientDetailPage() {
@@ -105,6 +232,7 @@ export default function PatientDetailPage() {
   }, [id]);
 
   const detected = Number(patient?.prediction) === 1;
+  const severity = useMemo(() => getSeverityLevel(patient?.probability_disease || 0), [patient]);
 
   const features = useMemo(() => {
     if (!patient?.features_used) return [];
@@ -155,43 +283,57 @@ export default function PatientDetailPage() {
               <Meta>{patient.patientData?.age} · {patient.patientData?.sex} · {formatShortDate(patient.createdAt)}</Meta>
             </div>
           </div>
-          <Badge variant={detected ? 'detected' : 'healthy'} size="lg">{patient.label}</Badge>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Badge variant={detected ? 'detected' : 'healthy'} size="lg">{patient.label}</Badge>
+            <Badge size="lg" variant={severity.level.toLowerCase()}>{severity.label}</Badge>
+          </div>
         </Head>
       </HeadCard>
 
       <Content>
         <div style={{ display: 'grid', gap: 12 }}>
           <Section>
-            <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 12 }}>
+            <MetricRow>
               <Card style={{ padding: 14 }}>
                 <RiskGauge value={Number(patient.probability_disease || 0) * 100} />
               </Card>
               <Card style={{ padding: 14, display: 'grid', gap: 10 }}>
                 <ProbabilityBar label="Disease probability" value={Number(patient.probability_disease || 0) * 100} color="#e8734a" />
                 <ProbabilityBar label="Healthy probability" value={Number(patient.probability_healthy || 0) * 100} color="#3ab5a0" />
+                <div>
+                  <SeverityLabel>Severity Level</SeverityLabel>
+                  <SeverityBar>
+                    <SeverityDot style={{ left: `${Math.max(0, Math.min(100, Number(patient.probability_disease || 0) * 100))}%` }} />
+                  </SeverityBar>
+                </div>
               </Card>
-            </div>
+            </MetricRow>
           </Section>
 
           <Section>
-            <h3 style={{ marginBottom: 10 }}>Elevated risk factors</h3>
+            <SectionTitle>Elevated risk factors</SectionTitle>
             {patient.risk_factors?.length ? (
               <div style={{ display: 'grid', gap: 10 }}>
                 {patient.risk_factors.map((factor) => (
-                  <Card key={factor.feature} style={{ padding: 12 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><AlertTriangle size={16} color="#e8734a" />{factor.label}</div>
-                      <div style={{ fontFamily: 'Fira Code, monospace', color: '#e8734a' }}>{factor.value}</div>
-                    </div>
-                    <div style={{ marginTop: 6, color: '#888', fontSize: 12 }}>Normal: {factor.low}-{factor.high}</div>
-                  </Card>
+                  <RiskFactorCard key={factor.feature}>
+                    <RiskFactorRow>
+                      <RiskFactorLabel>
+                        <AlertTriangle size={16} color="#e8734a" />
+                        {factor.label}
+                      </RiskFactorLabel>
+                      <RiskFactorValue>{factor.value}</RiskFactorValue>
+                    </RiskFactorRow>
+                    <RiskFactorNormal>Normal: {factor.low}-{factor.high}</RiskFactorNormal>
+                  </RiskFactorCard>
                 ))}
               </div>
-            ) : <Card style={{ padding: 12, background: '#e8f7f5', color: '#3ab5a0' }}>No elevated risk factors detected</Card>}
+            ) : (
+              <EmptyState>No elevated risk factors detected</EmptyState>
+            )}
           </Section>
 
           <Section>
-            <h3 style={{ marginBottom: 10 }}>Clinical data submitted</h3>
+            <SectionTitle>Clinical data submitted</SectionTitle>
             <Table>
               <tbody>
                 {rows.map(([label, value], index) => (
@@ -207,7 +349,7 @@ export default function PatientDetailPage() {
 
         <div style={{ display: 'grid', gap: 12 }}>
           <Section>
-            <h3 style={{ marginBottom: 10 }}>Model feature weights</h3>
+            <SectionTitle>Model feature weights</SectionTitle>
             <div style={{ height: 320 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={features} layout="vertical">
@@ -228,8 +370,6 @@ export default function PatientDetailPage() {
             <div style={{ marginTop: 3 }}>Hybrid GA-PSO-ANN</div>
             <div style={{ fontSize: 11, color: '#888899', marginTop: 10 }}>Assessed</div>
             <div style={{ marginTop: 3 }}>{formatShortDate(patient.createdAt)}</div>
-            <div style={{ fontSize: 11, color: '#888899', marginTop: 10 }}>Prediction ID</div>
-            <div style={{ marginTop: 3, fontFamily: 'Fira Code, monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{patient.id}</div>
           </Section>
         </div>
       </Content>
